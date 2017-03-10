@@ -6,6 +6,7 @@ require "trollop"
 opts = Trollop::options do
   opt :number_of_commits, "Number of commits to consider", :type => :integer, :default => 3_000
   opt :print_every, "Print a working message every X commits", :type => :integer, :default => 500
+  opt :touch_penalty, "How 'bad' each touch to a file counts as", :type => :integer, :default => 5
   #opt :monkey, "Use monkey mode"                    # flag --monkey, default false
   #opt :name, "Monkey name", :type => :string        # string --name <s>, default nil
   #opt :num_limbs, "Number of limbs", :default => 4  # integer --num-limbs <i>, default to 4
@@ -22,7 +23,7 @@ puts "Analyzing repo as of commit #{repo.head.target_id.inspect}"
 
 # TODO: merge commits w/ multiple parents
 
-file_changes = {}
+file_details = {}
 
 # d = repo.head.target.diff(repo.head.target.parents[0].parents[0])
 change = target
@@ -33,10 +34,10 @@ while changes_backward > 0
   diff.each_patch do |patch|
     delta = patch.delta
     path = delta.old_file[:path]
-    file_changes[path] ||= 0
-    point_change = patch.lines + 3
+    file_details[path] ||= { :change_score => 0, :last_oid => delta.new_file[:oid] }
+    point_change = patch.lines + opts[:touch_penalty]
     #puts "Applying change of #{point_change} (#{delta.old_file[:size].inspect} -> #{delta.new_file[:size].inspect}) to file #{path.inspect}..."
-    file_changes[path] += point_change
+    file_details[path][:change_score] += point_change
   end
   break unless change.parents[0]
   break if change.parents[0] == change
@@ -57,7 +58,8 @@ def tree_entry_for(repo, tree, path)
   while dirs.size > 0
     next_dir = dirs.shift
     entry = parent.get_entry next_dir
-    raise "Couldn't get entry for subdir #{next_dir.inspect} in tree_entry_for(repo, tree, #{path.inspect})!" unless entry
+    #raise "Couldn't get entry for subdir #{next_dir.inspect} in tree_entry_for(repo, tree, #{path.inspect})!" unless entry
+    return nil unless entry
     next_oid = entry[:oid]
     parent = repo.lookup next_oid
   end
@@ -67,19 +69,23 @@ end
 file_info = []
 puts "Getting linecounts..."
 head_tree = repo.head.target.tree
-file_changes.each do |path, points|
-  git_obj_hash = tree_entry_for repo, head_tree, path
-  raise "Can't find Git entry for #{path.inspect}!" unless git_obj_hash
-  file_content = repo.lookup(git_obj_hash[:oid]).text
-  linecount = file_content.split("\n").size # Oh God please optimize
-  churn = points.to_f / linecount
-  file_info << [path, points, linecount, churn]
+file_details.each do |path, h|
+  points = h[:change_score]
+  last_oid = h[:last_oid]
+  git_obj_entry = tree_entry_for repo, head_tree, path
+  deleted = !git_obj_entry || last_oid == "0000000000000000000000000000000000000000"
+  #raise "Can't find Git entry for #{path.inspect}!" unless git_obj_entry
+  file_content = deleted ? "" : repo.lookup(last_oid).text
+  deleted = true if file_content == ""
+  linecount = file_content.lines.count
+  churn = deleted ? 0.0 : points.to_f / linecount
+  file_info << [path, points, linecount, churn, deleted]
 end
 
-by_points = file_info.sort_by { |path, points, linecount, churn| churn }
+by_points = file_info.sort_by { |path, points, linecount, churn, deleted| deleted ? 0.0 : churn }
 
 puts "Filename: Churn ratio, points, linecount:"
-by_points.each do |path, points, linecount, churn|
-  puts "#{path.inspect}: #{churn}, #{points}, #{linecount}"
+by_points.each do |path, points, linecount, churn, deleted|
+  puts "#{deleted ? "XXX" : ""}#{path.inspect}: #{churn}, #{points}, #{linecount}"
 end
 
