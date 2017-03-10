@@ -11,6 +11,10 @@ opts = Trollop::options do
   #opt :num_limbs, "Number of limbs", :default => 4  # integer --num-limbs <i>, default to 4
 end
 
+if ARGV.size > 0
+  raise "Unrecognized arguments: #{ARGV.inspect}!"
+end
+
 repo = Rugged::Repository.new "."
 target = repo.head.target
 
@@ -45,11 +49,37 @@ while changes_backward > 0
   end
 end
 
-by_points = file_changes.to_a.sort_by { |path, points| points }
+def tree_entry_for(repo, tree, path)
+  path_sections = path.split("/")
+  dirs = path_sections[0..-2]
 
-puts "Amount of file change in points:"
-by_points.each do |path, points|
-  puts "#{path.inspect}: #{points}"
+  parent = tree
+  while dirs.size > 0
+    next_dir = dirs.shift
+    entry = parent.get_entry next_dir
+    raise "Couldn't get entry for subdir #{next_dir.inspect} in tree_entry_for(repo, tree, #{path.inspect})!" unless entry
+    next_oid = entry[:oid]
+    parent = repo.lookup next_oid
+  end
+  parent.get_entry path_sections[-1]
 end
-puts "======"
+
+file_info = []
+puts "Getting linecounts..."
+head_tree = repo.head.target.tree
+file_changes.each do |path, points|
+  git_obj_hash = tree_entry_for repo, head_tree, path
+  raise "Can't find Git entry for #{path.inspect}!" unless git_obj_hash
+  file_content = repo.lookup(git_obj_hash[:oid]).text
+  linecount = file_content.split("\n").size # Oh God please optimize
+  churn = points.to_f / linecount
+  file_info << [path, points, linecount, churn]
+end
+
+by_points = file_info.sort_by { |path, points, linecount, churn| churn }
+
+puts "Filename: Churn ratio, points, linecount:"
+by_points.each do |path, points, linecount, churn|
+  puts "#{path.inspect}: #{churn}, #{points}, #{linecount}"
+end
 
