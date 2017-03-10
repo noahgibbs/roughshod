@@ -98,19 +98,26 @@ file_details.each do |path, h|
 
   # Now calculate the various churn metrics...
   num_changes = h[:churn_events].size
-  median_lines_of_change = list_median h[:churn_events].map { |ev| ev[:lines] }
+  churn_lines = h[:churn_events].map { |ev| ev[:lines] }
+  median_lines_of_change = list_median churn_lines
   percent_churn_by_event = h[:churn_events].map { |ev| ev[:file_size] == 0 ? 0 : (ev[:lines].to_f / ev[:file_size]) }
 
-  file_info << [path, points, linecount, churn, deleted, { churn_median_lines: median_lines_of_change, percent_churn_per_change: percent_churn_by_event }]
+  file_info << [path, points, linecount, churn, deleted, {
+      churn_median_lines: median_lines_of_change,
+      churn_mean_lines: churn_lines.inject(0.0, &:+) / churn_lines.size,
+      median_churn_per_change: list_median(percent_churn_by_event),
+      mean_churn_per_change: percent_churn_by_event.inject(0.0, &:+) / percent_churn_by_event.size,
+      composite: ((churn_lines.inject(0.0, &:+) / churn_lines.size) * h[:churn_events].size),
+    }]
 end
 
-by_points = file_info.sort_by { |path, points, linecount, churn, deleted, metrics| deleted ? 0.0 : churn }
+by_points = file_info.sort_by { |path, points, linecount, churn, deleted, metrics| deleted ? 0.0 : metrics[:composite] }
 
 File.open("/tmp/roughshod_metrics_#{Time.now.to_i}.json", "w+") do |f|
   f.write JSON.pretty_generate(by_points)
 end
 
-puts "Filename: Churn ratio, points, linecount:"
+puts "Filename: Churn metric, linecount:"
 by_points.each do |path, points, linecount, churn, deleted, metrics|
-  puts "#{path}: #{churn}, #{points}, #{linecount}" unless deleted
+  puts "#{path}: #{metrics[:composite]}" unless deleted
 end
