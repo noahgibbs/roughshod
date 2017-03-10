@@ -1,0 +1,47 @@
+#!/usr/bin/env ruby
+
+require "rugged"
+require "trollop"
+
+opts = Trollop::options do
+  opt :number_of_commits, "Number of commits to consider", :type => :integer, :default => 10_000
+  #opt :monkey, "Use monkey mode"                    # flag --monkey, default false
+  #opt :name, "Monkey name", :type => :string        # string --name <s>, default nil
+  #opt :num_limbs, "Number of limbs", :default => 4  # integer --num-limbs <i>, default to 4
+end
+
+repo = Rugged::Repository.new "."
+target = repo.head.target
+
+puts "Analyzing repo as of commit #{repo.head.target_id.inspect}\n#{target.to_hash[:message]}\n===="
+
+# TODO: merge commits w/ multiple parents
+
+file_changes = {}
+
+# d = repo.head.target.diff(repo.head.target.parents[0].parents[0])
+change = target
+changes_backward = opts[:number_of_commits]
+while changes_backward > 0
+  puts "Going backward..."
+  diff = change.diff(change.parents[0])
+  diff.each_patch do |patch|
+    delta = patch.delta
+    path = delta.old_file[:path]
+    file_changes[path] ||= 0
+    point_change = patch.lines + 3
+    puts "Applying change of #{point_change} (#{delta.old_file[:size].inspect} -> #{delta.new_file[:size].inspect}) to file #{path.inspect}..."
+    file_changes[path] += point_change
+  end
+  break unless change.parents[0]
+  break if change.parents[0] == change
+  change = change.parents[0]
+  changes_backward -= 1
+end
+
+puts "Amount of file change in points:"
+file_changes.each do |path, points|
+  puts "#{path.inspect}: #{points}"
+end
+puts "======"
+
