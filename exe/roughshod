@@ -2,6 +2,7 @@
 
 require "rugged"
 require "trollop"
+require "json"
 
 opts = Trollop::options do
   opt :number_of_commits, "Number of commits to consider", :type => :integer, :default => 3_000
@@ -34,7 +35,8 @@ while changes_backward > 0
   diff.each_patch do |patch|
     delta = patch.delta
     path = delta.old_file[:path]
-    file_details[path] ||= { :change_score => 0, :last_oid => delta.new_file[:oid] }
+    file_details[path] ||= { :change_score => 0, :last_oid => delta.new_file[:oid], :churn_events => [] }
+    file_details[path][:churn_events] << { :lines => patch.lines, :file_size => delta.new_file[:size] }
     point_change = patch.lines + opts[:touch_penalty]
     #puts "Applying change of #{point_change} (#{delta.old_file[:size].inspect} -> #{delta.new_file[:size].inspect}) to file #{path.inspect}..."
     file_details[path][:change_score] += point_change
@@ -47,6 +49,20 @@ while changes_backward > 0
   if(last_print - changes_backward > opts[:print_every])
     puts "Working... (#{opts[:print_every]} commits processed)"
     last_print = changes_backward
+  end
+end
+
+def list_median(list)
+  list = list.sort
+  size = list.size
+  if size % 1 == 0
+    # Even-sized list
+    # Example: list length 10, take mean of list[4] and list[5]
+    (list[size / 2] + list[size / 2 - 1]) / 2.0
+  else
+    # Odd-sized list
+    # Example: list length 7, take list[3]
+    list[size / 2]
   end
 end
 
@@ -79,13 +95,22 @@ file_details.each do |path, h|
   deleted = true if file_content == ""
   linecount = file_content.lines.count
   churn = deleted ? 0.0 : points.to_f / linecount
-  file_info << [path, points, linecount, churn, deleted]
+
+  # Now calculate the various churn metrics...
+  num_changes = h[:churn_events].size
+  median_lines_of_change = list_median h[:churn_events].map { |ev| ev[:lines] }
+  percent_churn_by_event = h[:churn_events].map { |ev| ev[:file_size] == 0 ? 0 : (ev[:lines].to_f / ev[:file_size]) }
+
+  file_info << [path, points, linecount, churn, deleted, { churn_median_lines: median_lines_of_change, percent_churn_per_change: percent_churn_by_event }]
 end
 
-by_points = file_info.sort_by { |path, points, linecount, churn, deleted| deleted ? 0.0 : churn }
+by_points = file_info.sort_by { |path, points, linecount, churn, deleted, metrics| deleted ? 0.0 : churn }
+
+File.open("/tmp/roughshod_metrics_#{Time.now.to_i}.json", "w+") do |f|
+  f.write JSON.pretty_generate(by_points)
+end
 
 puts "Filename: Churn ratio, points, linecount:"
-by_points.each do |path, points, linecount, churn, deleted|
+by_points.each do |path, points, linecount, churn, deleted, metrics|
   puts "#{path}: #{churn}, #{points}, #{linecount}" unless deleted
 end
-
