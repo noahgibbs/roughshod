@@ -86,6 +86,6 @@ by_points = file_info.sort_by { |path, points, linecount, churn, deleted| delete
 
 puts "Filename: Churn ratio, points, linecount:"
 by_points.each do |path, points, linecount, churn, deleted|
-  puts "#{deleted ? "XXX" : ""}#{path.inspect}: #{churn}, #{points}, #{linecount}"
+  puts "#{path}: #{churn}, #{points}, #{linecount}" unless deleted
 end
 
