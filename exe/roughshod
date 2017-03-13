@@ -5,7 +5,7 @@ require "trollop"
 require "json"
 
 opts = Trollop::options do
-  opt :number_of_commits, "Number of commits to consider", :type => :integer, :default => 3_000
+  opt :number_of_commits, "Maximum number of commits to consider", :type => :integer, :default => 3_000
   opt :print_every, "Print a working message every X commits", :type => :integer, :default => 500
   opt :touch_penalty, "How 'bad' each touch to a file counts as", :type => :integer, :default => 5
   #opt :monkey, "Use monkey mode"                    # flag --monkey, default false
@@ -44,12 +44,13 @@ while changes_backward > 0
   break unless change.parents[0]
   break if change.parents[0] == change
   change = change.parents[0]
-  changes_backward -= 1
 
-  if(last_print - changes_backward > opts[:print_every])
-    puts "Working... (#{opts[:print_every]} commits processed)"
-    last_print = changes_backward
+  if(last_print - changes_backward >= opts[:print_every])
+    puts "Working... (#{opts[:number_of_commits] - changes_backward}/#{opts[:number_of_commits]} commits processed)"
+    last_print -= opts[:print_every]
   end
+
+  changes_backward -= 1
 end
 
 def list_median(list)
@@ -83,7 +84,6 @@ def tree_entry_for(repo, tree, path)
 end
 
 file_info = []
-puts "Getting linecounts..."
 head_tree = repo.head.target.tree
 file_details.each do |path, h|
   points = h[:change_score]
@@ -100,14 +100,18 @@ file_details.each do |path, h|
   num_changes = h[:churn_events].size
   churn_lines = h[:churn_events].map { |ev| ev[:lines] }
   median_lines_of_change = list_median churn_lines
-  percent_churn_by_event = h[:churn_events].map { |ev| ev[:file_size] == 0 ? 0 : (ev[:lines].to_f / ev[:file_size]) }
+  percent_churn_by_event = h[:churn_events].map { |ev| ev[:file_size] == 0 ? 0.0 : (ev[:lines].to_f / ev[:file_size]) }
+
+  composite = deleted ? 0.0 :
+    list_median(percent_churn_by_event) * Math.log(h[:churn_events][-1][:file_size]) * h[:churn_events].size
+  composite = 0.0 if composite.nan? || composite.infinite?
 
   file_info << [path, points, linecount, churn, deleted, {
       churn_median_lines: median_lines_of_change,
-      churn_mean_lines: churn_lines.inject(0.0, &:+) / churn_lines.size,
+      churn_mean_lines: churn_lines.size == 0 ? 0.0 : (churn_lines.inject(0.0, &:+) / churn_lines.size),
       median_churn_per_change: list_median(percent_churn_by_event),
       mean_churn_per_change: percent_churn_by_event.inject(0.0, &:+) / percent_churn_by_event.size,
-      composite: ((churn_lines.inject(0.0, &:+) / churn_lines.size) * h[:churn_events].size),
+      composite: composite,
     }]
 end
 
